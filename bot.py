@@ -6,35 +6,60 @@ import datetime
 import re
 import asyncio
 import logging
+import gspread
+from google.oauth2.service_account import Credentials
 from discord import ButtonStyle
 from discord.ext import commands
 from discord.ui import View, Button
 from dotenv import load_dotenv
 
-# Impostazioni di logging per il debug
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# ------------------------------------------------------------------------------
+# CONFIGURAZIONE DEI LOG
+# ------------------------------------------------------------------------------
+logging.basicConfig(level=logging.DEBUG, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
+# ------------------------------------------------------------------------------
+# CARICAMENTO DEL TOKEN DEL BOT
+# ------------------------------------------------------------------------------
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 if not TOKEN:
     logging.error("Errore: il token del bot non è stato trovato.")
     exit()
 
-# Configurazione del bot
+# ------------------------------------------------------------------------------
+# CONFIGURAZIONE GOOGLE SHEETS
+# ------------------------------------------------------------------------------
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SERVICE_ACCOUNT_FILE = "credentials.json"  # Assicurati che questo file esista
+try:
+    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open_by_key("13CiX3Ia_-O8Us_uLnVmLq6mpIBTq2GLHnmpHwCvD4dY")
+    worksheet = spreadsheet.worksheet("Foglio1")
+    logging.debug("✅ Google Sheets inizializzato correttamente.")
+except Exception as e:
+    logging.error(f"Errore nell'inizializzazione di Google Sheets: {e}")
+    exit()
+
+# ------------------------------------------------------------------------------
+# CONFIGURAZIONE DEL BOT
+# ------------------------------------------------------------------------------
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
 intents.messages = True
 intents.message_content = True
 intents.dm_messages = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Percorso del database
+# ------------------------------------------------------------------------------
+# CONFIGURAZIONE DEL DATABASE
+# ------------------------------------------------------------------------------
 DB_PATH = os.path.join(os.getcwd(), "database.db")
 BACKUP_PATH = os.path.join(os.getcwd(), "database_backup.db")
 
-# Connessione al Database
 def initialize_database():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -75,9 +100,16 @@ def save_user_data(user_id, username, email):
     VALUES (?, ?, ?, ?, ?)
     """, (user_id, username, "BestDEMO", date, email))
     save_database()
+    try:
+        # Prepariamo la riga per lo Sheets: Discord ID, Username, Role, Date, Email
+        row = [user_id, username, "BestDEMO", date, email]
+        worksheet.append_row(row)
+        logging.debug("✅ Dati aggiunti su Google Sheets.")
+    except Exception as e:
+        logging.error(f"Errore durante l'aggiornamento del Google Sheet: {e}")
 
 # ------------------------------------------------------------------------------
-#                            VERIFICHE E CREAZIONE CANALI
+# EVENTO ON_READY: CREAZIONE CATEGORIA E CANALE
 # ------------------------------------------------------------------------------
 @bot.event
 async def on_ready():
@@ -125,7 +157,7 @@ async def send_demo_message(channel):
             description=(
                 "It's time to show you what we've been working on for you over the past two years. "
                 "To download the DEMO, please check the minimum system requirements listed below and follow the instructions.\n"
-                "Be the First!\n\n"  # Aggiungi un salto di linea tra l'inglese e l'italiano
+                "Be the First!\n\n"
                 ":flag_it: E' arrivato il momento di mostrarvi cosa stiamo sviluppando per voi in questi ultimi due anni. "
                 "Per scaricare la DEMO, verifica i requisiti minimi sotto elencati e segui la procedura.\n"
                 "Buon divertimento.\n\n"
@@ -154,7 +186,6 @@ async def send_demo_message(channel):
     except Exception as e:
         logging.error(f"Errore durante l'invio del messaggio nel canale: {e}")
 
-
 class DemoSubscriptionView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -163,7 +194,7 @@ class DemoSubscriptionView(View):
         await start_private_chat(interaction)
 
 # ------------------------------------------------------------------------------
-#                     GESTIONE CHAT PRIVATA E RACCOLTA EMAIL
+# GESTIONE CHAT PRIVATA E RACCOLTA EMAIL
 # ------------------------------------------------------------------------------
 async def start_private_chat(interaction: discord.Interaction):
     try:
@@ -193,7 +224,8 @@ async def start_private_chat(interaction: discord.Interaction):
             category=private_chat_category,
             overwrites=overwrites
         )
-        # Indichiamo all'utente dove si trova la chat privata
+
+        # Invia un messaggio ephemeral che indica dove si trova la chat privata
         await interaction.response.send_message(
             f"✅ Private chat created: {private_channel.mention}\nYour chat is in the category **{private_chat_category.name}**.",
             ephemeral=True
@@ -227,16 +259,15 @@ async def start_private_chat(interaction: discord.Interaction):
             role = await guild.create_role(name="BestDEMO")
         await user.add_roles(role)
 
-        await private_channel.send("✅ You will soon receive an email with the link to download the DEMO! Let's build the Football Metaverse together! This chat will automatically delete in one minute!")
+        await private_channel.send("✅ Your BestDEMO role has been assigned. Check your email for the download!")
         
-        # Dopo 1 secondo attende, poi invia un messaggio finale e cancella la chat
+        # Attende 60 secondi, poi invia un messaggio finale e cancella la chat privata
         await asyncio.sleep(1)
         await private_channel.send("🧪 Try the Demo and let us know your feedback in #🧪│fix-and-bug.")
         await asyncio.sleep(60)
         await private_channel.delete()
-        # Alla fine il flusso termina, senza inviare ulteriori messaggi a canali pubblici.
     except Exception as e:
-        logging.error(f"Error private chat: {e}")
+        logging.error(f"Error in private chat: {e}")
         try:
             await interaction.response.send_message("⚠️ An error occurred. Please try again later.", ephemeral=True)
         except Exception:
@@ -247,6 +278,6 @@ def validate_email(email):
     return re.match(regex, email) is not None
 
 # ------------------------------------------------------------------------------
-#                           AVVIO DEL BOT
+# AVVIO DEL BOT
 # ------------------------------------------------------------------------------
 bot.run(TOKEN)
